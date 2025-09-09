@@ -12,6 +12,11 @@ tools:context=".MainActivity">
     android:layout_width="match_parent"
     android:layout_height="match_parent" />
 
+<com.example.roomnameplaterecognition.OverlayView
+        android:id="@+id/overlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
 <TextView
     android:id="@+id/main"
     android:layout_width="wrap_content"

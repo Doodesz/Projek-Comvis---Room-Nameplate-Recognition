@@ -37,6 +37,12 @@ android {
     buildFeatures {
         viewBinding = true // <-- ADD THIS BLOCK!
     }
+
+    packaging {
+        jniLibs {
+            useLegacyPackaging = false
+        }
+    }
 }
 
 dependencies {
@@ -49,6 +55,11 @@ dependencies {
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
 
-    // Akses kamera
+    // Camera access
     implementation(libs.bundles.camera)
+
+    // YOLO by TensorFlow Lite
+    //implementation("org.tensorflow:tensorflow-lite-task-vision:0.4.4")
+    implementation("org.tensorflow:tensorflow-lite-support:0.5.0")
+    implementation("org.tensorflow:tensorflow-lite:2.17.0")
 }
