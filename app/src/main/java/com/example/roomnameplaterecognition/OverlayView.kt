@@ -7,12 +7,13 @@ import android.graphics.Paint
 import android.graphics.RectF
 import android.util.AttributeSet
 import android.view.View
+import androidx.camera.core.ImageProxy
 import org.tensorflow.lite.task.vision.detector.Detection
-import kotlin.math.min
+import java.util.LinkedList
 
 class OverlayView(context: Context?, attrs: AttributeSet?) : View(context, attrs) {
 
-    private var results: List<Detection> = listOf()
+    private var results: List<Detection> = LinkedList<Detection>()
     private var boxPaint = Paint()
     private var textPaint = Paint()
 
@@ -41,24 +42,48 @@ class OverlayView(context: Context?, attrs: AttributeSet?) : View(context, attrs
             return
         }
 
-        // This is the new, smarter scaling logic!
-        // It calculates how to fit the image onto the screen while maintaining its shape.
-        val scaleFactor = min(width.toFloat() / imageWidth, height.toFloat() / imageHeight)
+        // This is the crucial rotation correction logic.
+        // It checks if the image is wider than it is tall (landscape) while the
+        // view is taller than it is wide (portrait), and vice-versa.
+        val isImageRotated = imageWidth > imageHeight && width < height || imageWidth < imageHeight && width > height
 
-        // It then calculates the empty space on the sides or top/bottom.
-        val scaledImageWidth = imageWidth * scaleFactor
-        val scaledImageHeight = imageHeight * scaleFactor
-        val offsetX = (width - scaledImageWidth) / 2
-        val offsetY = (height - scaledImageHeight) / 2
+        val scale: Float
+        val offsetX: Float
+        val offsetY: Float
+
+        if (isImageRotated) {
+            // If the image is rotated, we swap the dimensions for scaling calculations.
+            scale = width.toFloat() / imageHeight
+            offsetX = 0f
+            offsetY = (height - imageWidth * scale) / 2
+        } else {
+            scale = width.toFloat() / imageWidth
+            offsetX = 0f
+            offsetY = (height - imageHeight * scale) / 2
+        }
+
 
         for (result in results) {
             val boundingBox = result.boundingBox
+            var left: Float
+            var top: Float
+            var right: Float
+            var bottom: Float
 
-            // It uses the scale factor and offsets to draw the box in the perfect spot.
-            val left = boundingBox.left * scaleFactor + offsetX
-            val top = boundingBox.top * scaleFactor + offsetY
-            val right = boundingBox.right * scaleFactor + offsetX
-            val bottom = boundingBox.bottom * scaleFactor + offsetY
+            if (isImageRotated) {
+                // If rotated, we transform the coordinates from the landscape image
+                // to the portrait view.
+                left = boundingBox.top * scale + offsetX
+                top = (imageWidth - boundingBox.right) * scale + offsetY
+                right = boundingBox.bottom * scale + offsetX
+                bottom = (imageWidth - boundingBox.left) * scale + offsetY
+            } else {
+                // If not rotated, we just apply the scale and offset.
+                left = boundingBox.left * scale + offsetX
+                top = boundingBox.top * scale + offsetY
+                right = boundingBox.right * scale + offsetX
+                bottom = boundingBox.bottom * scale + offsetY
+            }
 
             val drawableRect = RectF(left, top, right, bottom)
             canvas.drawRect(drawableRect, boxPaint)
@@ -80,6 +105,6 @@ class OverlayView(context: Context?, attrs: AttributeSet?) : View(context, attrs
         results = detectionResults
         this.imageHeight = imageHeight
         this.imageWidth = imageWidth
-        invalidate() // This tells the view to redraw itself
+        invalidate()
     }
 }
