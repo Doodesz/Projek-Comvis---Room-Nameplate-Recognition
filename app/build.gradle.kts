@@ -59,7 +59,6 @@ dependencies {
     implementation(libs.bundles.camera)
 
     // YOLO by TensorFlow Lite
-    implementation("org.tensorflow:tensorflow-lite-task-vision:0.4.4")
-    //implementation("org.tensorflow:tensorflow-lite-support:0.5.0")
-    //implementation("org.tensorflow:tensorflow-lite:2.17.0")
+    implementation("com.google.mlkit:object-detection:17.0.2")
+    implementation("com.google.mlkit:common:18.11.0")
 }

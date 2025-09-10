@@ -12,9 +12,9 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
 import com.example.roomnameplaterecognition.databinding.ActivityMainBinding
 import com.google.common.util.concurrent.ListenableFuture
-import org.tensorflow.lite.support.image.TensorImage
-import org.tensorflow.lite.task.vision.detector.Detection
-import org.tensorflow.lite.task.vision.detector.ObjectDetector
+import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.objects.ObjectDetection
+import com.google.mlkit.vision.objects.defaults.ObjectDetectorOptions
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
@@ -22,7 +22,6 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
     private lateinit var cameraProviderFuture: ListenableFuture<ProcessCameraProvider>
-    private var objectDetector: ObjectDetector? = null
     private lateinit var cameraExecutor: ExecutorService
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -57,19 +56,8 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    @androidx.annotation.OptIn(androidx.camera.core.ExperimentalGetImage::class)
     private fun startCamera() {
-        try {
-            val options = ObjectDetector.ObjectDetectorOptions.builder()
-                .setMaxResults(5)
-                .setScoreThreshold(0.5f)
-                .build()
-            objectDetector = ObjectDetector.createFromFileAndOptions(this, "model.tflite", options)
-        } catch (e: Exception) {
-            Toast.makeText(this, "Error loading model: ${e.message}", Toast.LENGTH_LONG).show()
-            Log.e("MainActivity", "Error loading model", e)
-            return
-        }
-
         cameraProviderFuture = ProcessCameraProvider.getInstance(this)
         cameraProviderFuture.addListener({
             val cameraProvider: ProcessCameraProvider = cameraProviderFuture.get()
@@ -77,27 +65,56 @@ class MainActivity : AppCompatActivity() {
                 it.setSurfaceProvider(binding.viewFinder.surfaceProvider)
             }
 
+            // THE FIX FOR NO LABELS IS HERE:
+            val options = ObjectDetectorOptions.Builder()
+                .setDetectorMode(ObjectDetectorOptions.STREAM_MODE)
+                .enableClassification()  // This allows us to get labels
+                .enableMultipleObjects() // This allows us to find more than one object
+                .build()
+            val objectDetector = ObjectDetection.getClient(options)
+
             val imageAnalyzer = ImageAnalysis.Builder()
-                .setTargetRotation(binding.viewFinder.display.rotation)
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .build()
                 .also {
                     it.setAnalyzer(cameraExecutor, ImageAnalysis.Analyzer { imageProxy ->
-                        // The important change is getting the bitmap first
-                        val bitmap = imageProxy.toBitmap()
-                        val tensorImage = TensorImage.fromBitmap(bitmap)
+                        val mediaImage = imageProxy.image
+                        if (mediaImage != null) {
+                            val image = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
 
-                        val results = objectDetector?.detect(tensorImage)
+                            objectDetector.process(image)
+                                .addOnSuccessListener { detectedObjects ->
 
-                        runOnUiThread {
-                            // And passing the bitmap's dimensions
-                            binding.overlay.setResults(
-                                results ?: listOf(),
-                                bitmap.height,
-                                bitmap.width
-                            )
+                                    // THE FIX FOR INACCURATE BOXES IS HERE:
+                                    // We need to check the rotation and pass the correct width and height to the overlay.
+                                    val rotationDegrees = imageProxy.imageInfo.rotationDegrees
+
+                                    val finalImageHeight: Int
+                                    val finalImageWidth: Int
+
+                                    if (rotationDegrees == 0 || rotationDegrees == 180) {
+                                        finalImageHeight = imageProxy.height
+                                        finalImageWidth = imageProxy.width
+                                    } else {
+                                        finalImageHeight = imageProxy.width
+                                        finalImageWidth = imageProxy.height
+                                    }
+
+                                    runOnUiThread {
+                                        binding.overlay.setResults(
+                                            detectedObjects,
+                                            finalImageHeight,
+                                            finalImageWidth
+                                        )
+                                    }
+                                }
+                                .addOnFailureListener { e ->
+                                    Log.e("MainActivity", "Object detection failed", e)
+                                }
+                                .addOnCompleteListener {
+                                    imageProxy.close()
+                                }
                         }
-                        imageProxy.close()
                     })
                 }
 
