@@ -22,8 +22,13 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import android.graphics.ImageFormat
 import android.graphics.Rect
+import android.graphics.RectF
 import android.graphics.YuvImage
 import java.io.ByteArrayOutputStream
+import java.io.BufferedReader
+import java.io.InputStreamReader
+import kotlin.math.max
+import kotlin.math.min
 
 class MainActivity : AppCompatActivity() {
 
@@ -31,6 +36,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var previewView: PreviewView
     private lateinit var overlayView: OverlayView
     private var module: Module? = null
+
+    private val classNames = mutableListOf<String>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -50,6 +57,23 @@ class MainActivity : AppCompatActivity() {
 
         // Load the PyTorch model
         loadPyTorchModel()
+
+        // Add this line to load the labels from the text file
+        loadClassNames()
+    }
+
+    // Add this new function to load the labels
+    private fun loadClassNames() {
+        try {
+            val reader = BufferedReader(InputStreamReader(assets.open("labels.txt")))
+            var line: String?
+            while (reader.readLine().also { line = it } != null) {
+                classNames.add(line!!)
+            }
+            reader.close()
+        } catch (e: Exception) {
+            Log.e("Labels", "Error loading class names!", e)
+        }
     }
 
     private fun startCamera() {
@@ -94,33 +118,111 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-// In MainActivity.kt
-
     private fun runModelInference(bitmap: Bitmap) {
         module?.let {
-            // 👇 THIS IS THE NEW MAGIC LINE! 👇
-            // We resize the bitmap from the camera to the 640x640 size our model expects.
             val resizedBitmap = Bitmap.createScaledBitmap(bitmap, 640, 640, true)
 
-            // Step 1: Prepare the image for the model (using the RESIZED bitmap!)
+            // We create the "no sunglasses" values ourselves!
+            val noMean = floatArrayOf(0.0f, 0.0f, 0.0f)
+            val noStd = floatArrayOf(1.0f, 1.0f, 1.0f)
+
             val inputTensor = TensorImageUtils.bitmapToFloat32Tensor(
-                resizedBitmap, // <-- Make sure to use the resizedBitmap here!
-                TensorImageUtils.TORCHVISION_NORM_MEAN_RGB,
-                TensorImageUtils.TORCHVISION_NORM_STD_RGB
+                resizedBitmap,
+                noMean,
+                noStd
             )
 
-            // Step 2: Run the model!
             val outputTensor = it.forward(IValue.from(inputTensor)).toTensor()
             val results = outputTensor.dataAsFloatArray
 
-            // Step 3: Process the results and update the UI
-            // This is where you'll add your logic to find the bounding boxes
-            // from the 'results' array and draw them on your OverlayView.
+            // This is the new part! We decode the results.
+            val boxes = parseYoloOutput(results)
 
             runOnUiThread {
-                // overlayView.setResults(your_parsed_bounding_boxes)
+                // And send the final, clean boxes to be drawn!
+                overlayView.setResults(boxes)
             }
         }
+    }
+
+    // 👇 PASTE THIS ENTIRE HUGE DECODER FUNCTION!
+    private fun parseYoloOutput(results: FloatArray): List<BoundingBox> {
+        val numClasses = 9 // From your labels file
+        val numBoxes = results.size / (numClasses + 4)
+        val boxes = mutableListOf<BoundingBox>()
+
+        for (i in 0 until numBoxes) {
+            val classScores = results.sliceArray(i * (numClasses + 4) + 4 until (i + 1) * (numClasses + 4))
+            var maxScore = 0f
+            var maxIndex = -1
+            for (j in classScores.indices) {
+                if (classScores[j] > maxScore) {
+                    maxScore = classScores[j]
+                    maxIndex = j
+                }
+            }
+
+            if (maxScore > 0.5f) { // Confidence Threshold
+                val cx = results[i * (numClasses + 4)]
+                val cy = results[i * (numClasses + 4) + 1]
+                val w = results[i * (numClasses + 4) + 2]
+                val h = results[i * (numClasses + 4) + 3]
+
+                val x1 = cx - w / 2
+                val y1 = cy - h / 2
+                val x2 = cx + w / 2
+                val y2 = cy + h / 2
+
+                boxes.add(
+                    BoundingBox(
+                        x1, y1, x2, y2, cx, cy, w, h,
+                        cnf = maxScore,
+                        cls = maxIndex,
+                        clsName = if (maxIndex in classNames.indices) classNames[maxIndex] else "Unknown"
+                    )
+                )
+            }
+        }
+        return applyNMS(boxes) // Apply Non-Maximum Suppression
+    }
+
+    // Add this helper function for Non-Maximum Suppression (NMS)
+    private fun applyNMS(boxes: List<BoundingBox>): List<BoundingBox> {
+        val sortedBoxes = boxes.sortedByDescending { it.cnf }
+        val selectedBoxes = mutableListOf<BoundingBox>()
+        val active = BooleanArray(boxes.size) { true }
+        var numActive = active.size
+
+        for (i in sortedBoxes.indices) {
+            if (active[i]) {
+                val boxA = sortedBoxes[i]
+                selectedBoxes.add(boxA)
+                if (numActive == 1) break
+
+                for (j in i + 1 until sortedBoxes.size) {
+                    if (active[j]) {
+                        val boxB = sortedBoxes[j]
+                        if (calculateIoU(boxA.getRect(), boxB.getRect()) > 0.4f) { // IoU Threshold
+                            active[j] = false
+                            numActive--
+                        }
+                    }
+                }
+            }
+        }
+        return selectedBoxes
+    }
+
+    // Add this helper function to calculate Intersection over Union (IoU)
+    private fun calculateIoU(rectA: RectF, rectB: RectF): Float {
+        val xA = max(rectA.left, rectB.left)
+        val yA = max(rectA.top, rectB.top)
+        val xB = min(rectA.right, rectB.right)
+        val yB = min(rectA.bottom, rectB.bottom)
+        val interArea = max(0f, xB - xA) * max(0f, yB - yA)
+        val boxAArea = (rectA.right - rectA.left) * (rectA.bottom - rectA.top)
+        val boxBArea = (rectB.right - rectB.left) * (rectB.bottom - rectB.top)
+        return interArea / (boxAArea + boxBArea - interArea)
     }
 
     private fun loadPyTorchModel() {
