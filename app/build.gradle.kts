@@ -59,10 +59,13 @@ dependencies {
     // Camera access
     implementation(libs.bundles.camera)
 
-    // YOLO by TensorFlow Lite
-    implementation("com.google.mlkit:object-detection-custom:17.0.2")
-    implementation("com.google.mlkit:object-detection:17.0.2")
+    // OCR
     implementation("com.google.mlkit:common:18.11.0")
+    implementation("com.google.mlkit:text-recognition:16.0.1")
+
+    // Object Detection
     implementation("org.pytorch:pytorch_android:1.13.1")
     implementation("org.pytorch:pytorch_android_torchvision:1.13.1")
+
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.7.3")
 }

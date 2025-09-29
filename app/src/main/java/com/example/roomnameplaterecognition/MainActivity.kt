@@ -28,11 +28,17 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import kotlin.math.max
 import kotlin.math.min
-import android.renderscript.Allocation
-import android.renderscript.Element
-import android.renderscript.RenderScript
-import android.renderscript.ScriptIntrinsicYuvToRGB
-import android.renderscript.Type
+import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.text.TextRecognition
+import com.google.mlkit.vision.text.TextRecognizer
+import com.google.mlkit.vision.text.latin.TextRecognizerOptions
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.tasks.await
+import kotlin.coroutines.resumeWithException
 
 class MainActivity : AppCompatActivity() {
 
@@ -46,6 +52,10 @@ class MainActivity : AppCompatActivity() {
 
     // CameraX and Model variables
     private lateinit var cameraExecutor: ExecutorService
+
+    // OCR
+    private lateinit var textRecognizer: TextRecognizer
+
     private var module: Module? = null
     private var imageCapture: ImageCapture? = null
     private val classNames = mutableListOf<String>()
@@ -66,6 +76,9 @@ class MainActivity : AppCompatActivity() {
         captureButton.setOnClickListener { takePhoto() }
         backButton.setOnClickListener { showCameraView() }
 
+        // OCR
+        textRecognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+
         // Standard setup
         if (allPermissionsGranted()) {
             startCamera()
@@ -80,34 +93,94 @@ class MainActivity : AppCompatActivity() {
     private fun takePhoto() {
         val imageCapture = imageCapture ?: return
 
-        imageCapture.takePicture(
-            cameraExecutor, // CHANGED: We tell it to run on the background thread
-            object : ImageCapture.OnImageCapturedCallback() {
-                override fun onCaptureSuccess(image: ImageProxy) {
-                    // This whole block now runs safely in the background!
-                    Log.d(TAG, "Photo capture succeeded on background thread.")
+        // Use a coroutine to do the heavy work in the background so the app doesn't freeze
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                // 1. Capture the image using a coroutine-friendly wrapper
+                val image = takePictureAsynchronously(imageCapture)
+                val capturedBitmap = imageProxyToBitmap(image)
+                image.close()
 
-                    val capturedBitmap = imageProxyToBitmap(image)
-                    image.close()
+                if (capturedBitmap != null) {
+                    // 2. Run your YOLO model to get the bounding boxes
+                    val boxes = runModelInference(capturedBitmap)
 
-                    if (capturedBitmap != null) {
-                        val boxes = runModelInference(capturedBitmap)
-                        val resultBitmap = drawBoxesOnBitmap(capturedBitmap, boxes)
+                    // 3. Run OCR on each detected box
+                    val boxesWithText = runOcrOnBoundingBoxes(capturedBitmap, boxes)
 
-                        // When we're ready to show the result, we switch back to the main thread.
-                        runOnUiThread {
-                            showResultView(resultBitmap)
-                        }
-                    } else {
-                        Log.e(TAG, "Bitmap is NULL. The image conversion failed!")
+                    // 4. Draw the final bitmap with boxes and the new text
+                    val resultBitmap = drawBoxesOnBitmap(capturedBitmap, boxesWithText)
+
+                    // 5. Switch to the main thread to show the result
+                    withContext(Dispatchers.Main) {
+                        showResultView(resultBitmap)
                     }
                 }
-
-                override fun onError(exc: ImageCaptureException) {
-                    Log.e(TAG, "Photo capture failed: ${exc.message}", exc)
-                }
+            } catch (exc: Exception) {
+                Log.e(TAG, "Photo capture or processing failed", exc)
             }
-        )
+        }
+    }
+
+    private suspend fun takePictureAsynchronously(imageCapture: ImageCapture): ImageProxy {
+        return suspendCancellableCoroutine { continuation ->
+            imageCapture.takePicture(
+                cameraExecutor, // You can also use ContextCompat.getMainExecutor(this)
+                object : ImageCapture.OnImageCapturedCallback() {
+                    override fun onCaptureSuccess(image: ImageProxy) {
+                        Log.d(TAG, "Photo capture succeeded!")
+                        continuation.resume(image) {
+                            // This block is called if the coroutine is cancelled.
+                            // We should close the image to prevent memory leaks.
+                            image.close()
+                        }
+                    }
+
+                    override fun onError(exc: ImageCaptureException) {
+                        Log.e(TAG, "Photo capture failed: ${exc.message}", exc)
+                        continuation.resumeWithException(exc)
+                    }
+                }
+            )
+        }
+    }
+
+    private suspend fun runOcrOnBoundingBoxes(originalBitmap: Bitmap, boxes: List<BoundingBox>): List<BoundingBox> {
+        // This calculates how to scale the box coordinates from the small 640x640 image
+        // back to the big, original high-quality image.
+        val scaleX = originalBitmap.width / 640f
+        val scaleY = originalBitmap.height / 640f
+
+        // We loop through every box that the YOLO model found.
+        for (box in boxes) {
+            try {
+                // We calculate the exact coordinates to crop from the big image.
+                val left = (box.x1 * scaleX).toInt().coerceAtLeast(0)
+                val top = (box.y1 * scaleY).toInt().coerceAtLeast(0)
+                val width = ((box.x2 - box.x1) * scaleX).toInt().coerceAtMost(originalBitmap.width - left)
+                val height = ((box.y2 - box.y1) * scaleY).toInt().coerceAtMost(originalBitmap.height - top)
+
+                // We create a small bitmap of just the detected area (the nameplate).
+                val croppedBitmap = Bitmap.createBitmap(originalBitmap, left, top, width, height)
+
+                // We prepare this small bitmap for ML Kit.
+                val image = InputImage.fromBitmap(croppedBitmap, 0)
+
+                // We run the OCR and wait for the result.
+                val result = textRecognizer.process(image).await()
+
+                // We save the text we found into our BoundingBox object.
+                // We also replace any line breaks with a space to keep it on one line.
+                box.recognizedText = result.text.replace("\n", " ")
+
+                Log.d(TAG, "OCR Result for box ${box.clsName}: ${box.recognizedText}")
+
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to crop or run OCR on a box", e)
+                box.recognizedText = "OCR Error" // Mark that OCR failed for this box
+            }
+        }
+        return boxes // Return the list of boxes, now updated with text!
     }
 
     // This function now returns the list of detected boxes
@@ -126,20 +199,23 @@ class MainActivity : AppCompatActivity() {
     }
 
     // NEW: This function draws the results directly onto the photo
+// In MainActivity.kt
+// 👇 REPLACE your old drawBoxesOnBitmap function with this one
     private fun drawBoxesOnBitmap(bitmap: Bitmap, boxes: List<BoundingBox>): Bitmap {
         val mutableBitmap = bitmap.copy(Bitmap.Config.ARGB_8888, true)
         val canvas = Canvas(mutableBitmap)
 
         val boxPaint = Paint().apply {
-            color = Color.parseColor("#FF6F61")
+            color = Color.parseColor("#FF6F61") // A nice coral color
             style = Paint.Style.STROKE
             strokeWidth = 8f
         }
 
         val textPaint = Paint().apply {
             color = Color.WHITE
-            textSize = 50f
+            textSize = 50f // Made the text a bit bigger
             style = Paint.Style.FILL
+            setShadowLayer(5f, 0f, 0f, Color.BLACK) // Added a shadow for readability
         }
 
         val scaleX = mutableBitmap.width.toFloat() / 640f
@@ -152,8 +228,13 @@ class MainActivity : AppCompatActivity() {
             )
             canvas.drawRect(scaledRect, boxPaint)
 
-            val text = "${box.clsName} (${"%.2f".format(box.cnf)})"
-            canvas.drawText(text, scaledRect.left, scaledRect.top - 10, textPaint)
+            // If OCR found text, show it. If not, show the class name.
+            val textToShow = if (box.recognizedText.isNotBlank()) {
+                box.recognizedText
+            } else {
+                box.clsName
+            }
+            canvas.drawText(textToShow, scaledRect.left, scaledRect.top - 20, textPaint)
         }
         return mutableBitmap
     }
@@ -325,6 +406,7 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         cameraExecutor.shutdown()
+        textRecognizer.close()
     }
 
     companion object {
