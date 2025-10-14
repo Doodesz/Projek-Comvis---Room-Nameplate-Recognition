@@ -8,6 +8,7 @@ import android.util.Log
 import android.view.View
 import android.widget.Button
 import android.widget.ImageView
+import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.*
 import androidx.camera.lifecycle.ProcessCameraProvider
@@ -50,11 +51,11 @@ class MainActivity : AppCompatActivity() {
     private lateinit var captureButton: Button
     private lateinit var backButton: Button
 
-    // CameraX and Model variables
-    private lateinit var cameraExecutor: ExecutorService
+    private lateinit var cameraExecutor: ExecutorService // CameraX and Model variables
 
-    // OCR
-    private lateinit var textRecognizer: TextRecognizer
+    private lateinit var textRecognizer: TextRecognizer // OCR
+
+    private lateinit var ocrTextView: TextView
 
     private var module: Module? = null
     private var imageCapture: ImageCapture? = null
@@ -71,6 +72,7 @@ class MainActivity : AppCompatActivity() {
         resultImageView = findViewById(R.id.resultImageView)
         captureButton = findViewById(R.id.captureButton)
         backButton = findViewById(R.id.backButton)
+        ocrTextView = findViewById(R.id.ocrTextView)
 
         // Set up button listeners
         captureButton.setOnClickListener { takePhoto() }
@@ -93,31 +95,48 @@ class MainActivity : AppCompatActivity() {
     private fun takePhoto() {
         val imageCapture = imageCapture ?: return
 
-        // Use a coroutine to do the heavy work in the background so the app doesn't freeze
         lifecycleScope.launch(Dispatchers.IO) {
             try {
-                // 1. Capture the image using a coroutine-friendly wrapper
                 val image = takePictureAsynchronously(imageCapture)
                 val capturedBitmap = imageProxyToBitmap(image)
                 image.close()
 
                 if (capturedBitmap != null) {
-                    // 2. Run your YOLO model to get the bounding boxes
                     val boxes = runModelInference(capturedBitmap)
+                    var finalOcrText = "" // Variabel untuk menyimpan teks akhir
 
-                    // 3. Run OCR on each detected box
-                    val boxesWithText = runOcrOnBoundingBoxes(capturedBitmap, boxes)
+                    if (boxes.isNotEmpty()) {
+                        // Kita hanya proses kotak pertama yang terdeteksi untuk kesederhanaan
+                        val mainBox = boxes[0]
 
-                    // 4. Draw the final bitmap with boxes and the new text
-                    val resultBitmap = drawBoxesOnBitmap(capturedBitmap, boxesWithText)
+                        // 👇 LOGIKA BARU DIMULAI DI SINI 👇
+                        when (mainBox.clsName) {
+                            "toilet", "toilet difabel", "toilet laki-laki", "toilet perempuan" -> {
+                                finalOcrText = "(Toilet)"
+                            }
+                            "tempat wudhu" -> {
+                                finalOcrText = "(Tempat Wudhu)"
+                            }
+                            else -> {
+                                // Jika bukan kelas spesial, baru jalankan OCR
+                                val boxesWithText = runOcrOnBoundingBoxes(capturedBitmap, listOf(mainBox))
+                                finalOcrText = boxesWithText[0].recognizedText.ifBlank { "Teks tidak terbaca" }
+                            }
+                        }
+                    } else {
+                        finalOcrText = "Objek tidak ditemukan"
+                    }
 
-                    // 5. Switch to the main thread to show the result
+                    val resultBitmap = drawBoxesOnBitmap(capturedBitmap, boxes)
+
                     withContext(Dispatchers.Main) {
+                        // Update TextView dengan teks final
+                        ocrTextView.text = finalOcrText
                         showResultView(resultBitmap)
                     }
                 }
             } catch (exc: Exception) {
-                Log.e(TAG, "Photo capture or processing failed", exc)
+                Log.e(TAG, "Photo capture atau processing gagal", exc)
             }
         }
     }
@@ -198,24 +217,21 @@ class MainActivity : AppCompatActivity() {
         } ?: emptyList() // Return an empty list if the model is null
     }
 
-    // NEW: This function draws the results directly onto the photo
-// In MainActivity.kt
-// 👇 REPLACE your old drawBoxesOnBitmap function with this one
     private fun drawBoxesOnBitmap(bitmap: Bitmap, boxes: List<BoundingBox>): Bitmap {
         val mutableBitmap = bitmap.copy(Bitmap.Config.ARGB_8888, true)
         val canvas = Canvas(mutableBitmap)
 
         val boxPaint = Paint().apply {
-            color = Color.parseColor("#FF6F61") // A nice coral color
+            color = Color.parseColor("#FF6F61")
             style = Paint.Style.STROKE
             strokeWidth = 8f
         }
 
         val textPaint = Paint().apply {
             color = Color.WHITE
-            textSize = 50f // Made the text a bit bigger
+            textSize = 50f
             style = Paint.Style.FILL
-            setShadowLayer(5f, 0f, 0f, Color.BLACK) // Added a shadow for readability
+            setShadowLayer(5f, 0f, 0f, Color.BLACK)
         }
 
         val scaleX = mutableBitmap.width.toFloat() / 640f
@@ -228,13 +244,9 @@ class MainActivity : AppCompatActivity() {
             )
             canvas.drawRect(scaledRect, boxPaint)
 
-            // If OCR found text, show it. If not, show the class name.
-            val textToShow = if (box.recognizedText.isNotBlank()) {
-                box.recognizedText
-            } else {
-                box.clsName
-            }
-            canvas.drawText(textToShow, scaledRect.left, scaledRect.top - 20, textPaint)
+            // KEMBALI HANYA MENAMPILKAN NAMA KELAS
+            val text = "${box.clsName} (${"%.2f".format(box.cnf)})"
+            canvas.drawText(text, scaledRect.left, scaledRect.top - 20, textPaint)
         }
         return mutableBitmap
     }
