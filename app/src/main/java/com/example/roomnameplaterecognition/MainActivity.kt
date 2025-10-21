@@ -61,6 +61,10 @@ class MainActivity : AppCompatActivity() {
     private var imageCapture: ImageCapture? = null
     private val classNames = mutableListOf<String>()
 
+    // Timer
+    private lateinit var timerTotalTextView: TextView
+    private lateinit var timerBreakdownTextView: TextView
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -81,6 +85,10 @@ class MainActivity : AppCompatActivity() {
         // OCR
         textRecognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
 
+        // Timer
+        timerTotalTextView = findViewById(R.id.timer_total)
+        timerBreakdownTextView = findViewById(R.id.timer_breakdown)
+
         // Standard setup
         if (allPermissionsGranted()) {
             startCamera()
@@ -92,24 +100,40 @@ class MainActivity : AppCompatActivity() {
         loadClassNames()
     }
 
+    // Di MainActivity.kt
+// Ganti seluruh fungsi takePhoto() dengan yang ini
     private fun takePhoto() {
         val imageCapture = imageCapture ?: return
+        captureButton.isEnabled = false
+        captureButton.text = "Detecting..."
 
         lifecycleScope.launch(Dispatchers.IO) {
             try {
+                // --- Mulai Timer ---
+                val startTimeTotal = System.currentTimeMillis()
+                var timeAfterCapture: Long
+                var timeAfterBitmap: Long
+                var timeAfterDetection: Long
+                var timeAfterOcr: Long
+                var timeAfterDraw: Long
+
+                // 1. Ambil Gambar
                 val image = takePictureAsynchronously(imageCapture)
+                timeAfterCapture = System.currentTimeMillis() // Catat waktu setelah gambar ditangkap
+
                 val capturedBitmap = imageProxyToBitmap(image)
                 image.close()
+                timeAfterBitmap = System.currentTimeMillis() // Catat waktu setelah konversi bitmap
 
                 if (capturedBitmap != null) {
+                    // 2. Deteksi Objek
                     val boxes = runModelInference(capturedBitmap)
-                    var finalOcrText = "" // Variabel untuk menyimpan teks akhir
+                    timeAfterDetection = System.currentTimeMillis() // Catat waktu setelah deteksi objek
 
+                    // 3. Logika OCR Kondisional
+                    var finalOcrText = ""
                     if (boxes.isNotEmpty()) {
-                        // Kita hanya proses kotak pertama yang terdeteksi untuk kesederhanaan
                         val mainBox = boxes[0]
-
-                        // 👇 LOGIKA BARU DIMULAI DI SINI 👇
                         when (mainBox.clsName) {
                             "toilet", "toilet difabel", "toilet laki-laki", "toilet perempuan" -> {
                                 finalOcrText = "(Toilet)"
@@ -118,7 +142,6 @@ class MainActivity : AppCompatActivity() {
                                 finalOcrText = "(Tempat Wudhu)"
                             }
                             else -> {
-                                // Jika bukan kelas spesial, baru jalankan OCR
                                 val boxesWithText = runOcrOnBoundingBoxes(capturedBitmap, listOf(mainBox))
                                 finalOcrText = boxesWithText[0].recognizedText.ifBlank { "Teks tidak terbaca" }
                             }
@@ -126,17 +149,44 @@ class MainActivity : AppCompatActivity() {
                     } else {
                         finalOcrText = "Objek tidak ditemukan"
                     }
+                    timeAfterOcr = System.currentTimeMillis() // Catat waktu setelah proses OCR/logika
 
+                    // 4. Gambar Hasil Akhir
                     val resultBitmap = drawBoxesOnBitmap(capturedBitmap, boxes)
+                    timeAfterDraw = System.currentTimeMillis() // Catat waktu setelah menggambar
 
+                    // --- Hitung Durasi ---
+                    val totalDuration = timeAfterDraw - startTimeTotal
+                    val captureDuration = timeAfterCapture - startTimeTotal
+                    val bitmapDuration = timeAfterBitmap - timeAfterCapture
+                    val detectionDuration = timeAfterDetection - timeAfterBitmap
+                    val ocrDuration = timeAfterOcr - timeAfterDetection
+                    val drawDuration = timeAfterDraw - timeAfterOcr
+
+                    // 5. Tampilkan Hasil di Main Thread
                     withContext(Dispatchers.Main) {
-                        // Update TextView dengan teks final
+                        // Update TextView dengan teks final dan timer
                         ocrTextView.text = finalOcrText
+                        timerTotalTextView.text = "Total Duration: $totalDuration ms"
+                        timerBreakdownTextView.text = """
+                        Breakdown:
+                        - Capture: $captureDuration ms
+                        - Bitmap Conv: $bitmapDuration ms
+                        - Object Detection: $detectionDuration ms
+                        - OCR/Logic: $ocrDuration ms
+                        - Drawing: $drawDuration ms
+                    """.trimIndent()
+
                         showResultView(resultBitmap)
                     }
                 }
             } catch (exc: Exception) {
                 Log.e(TAG, "Photo capture atau processing gagal", exc)
+
+                withContext(Dispatchers.Main) {
+                    captureButton.isEnabled = true
+                    captureButton.text = "Detect"
+                }
             }
         }
     }
@@ -260,6 +310,9 @@ class MainActivity : AppCompatActivity() {
     private fun showCameraView() {
         cameraContainer.visibility = View.VISIBLE
         resultContainer.visibility = View.GONE
+
+        captureButton.isEnabled = true
+        captureButton.text = "Detect"
     }
 
     // --- All other functions below this line are the same, no changes needed ---
