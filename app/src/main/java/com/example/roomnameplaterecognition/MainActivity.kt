@@ -1,4 +1,4 @@
-package com.example.roomnameplaterecognition // Make sure this is your package name
+package com.example.roomnameplaterecognition
 
 import android.Manifest
 import android.content.pm.PackageManager
@@ -43,7 +43,7 @@ import kotlin.coroutines.resumeWithException
 
 class MainActivity : AppCompatActivity() {
 
-    // UI Views
+    // UI
     private lateinit var cameraContainer: ConstraintLayout
     private lateinit var resultContainer: ConstraintLayout
     private lateinit var previewView: PreviewView
@@ -51,10 +51,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var captureButton: Button
     private lateinit var backButton: Button
 
+    // Logic
     private lateinit var cameraExecutor: ExecutorService // CameraX and Model variables
-
     private lateinit var textRecognizer: TextRecognizer // OCR
-
     private lateinit var ocrTextView: TextView
 
     private var module: Module? = null
@@ -69,7 +68,6 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        // Find all our UI elements
         cameraContainer = findViewById(R.id.camera_container)
         resultContainer = findViewById(R.id.result_container)
         previewView = findViewById(R.id.previewView)
@@ -100,8 +98,6 @@ class MainActivity : AppCompatActivity() {
         loadClassNames()
     }
 
-    // Di MainActivity.kt
-// Ganti seluruh fungsi takePhoto() dengan yang ini
     private fun takePhoto() {
         val imageCapture = imageCapture ?: return
         captureButton.isEnabled = false
@@ -109,7 +105,7 @@ class MainActivity : AppCompatActivity() {
 
         lifecycleScope.launch(Dispatchers.IO) {
             try {
-                // --- Mulai Timer ---
+                // Timer declaration
                 val startTimeTotal = System.currentTimeMillis()
                 var timeAfterCapture: Long
                 var timeAfterBitmap: Long
@@ -135,27 +131,36 @@ class MainActivity : AppCompatActivity() {
                     if (boxes.isNotEmpty()) {
                         val mainBox = boxes[0]
                         when (mainBox.clsName) {
-                            "toilet", "toilet difabel", "toilet laki-laki", "toilet perempuan" -> {
-                                finalOcrText = "(Toilet)"
+                            "toilet" -> {
+                                finalOcrText = "(Restroom)"
+                            }
+                            "toilet difabel" -> {
+                                finalOcrText = "(Disabled Restroom)"
+                            }
+                            "toilet laki-laki" -> {
+                                finalOcrText = "(Men's Restroom)"
+                            }
+                            "toilet perempuan" -> {
+                                finalOcrText = "(Women's Restroom)"
                             }
                             "tempat wudhu" -> {
-                                finalOcrText = "(Tempat Wudhu)"
+                                finalOcrText = "Tempat Wudhu"
                             }
                             else -> {
                                 val boxesWithText = runOcrOnBoundingBoxes(capturedBitmap, listOf(mainBox))
-                                finalOcrText = boxesWithText[0].recognizedText.ifBlank { "Teks tidak terbaca" }
+                                finalOcrText = boxesWithText[0].recognizedText.ifBlank { "Could not recognize text" }
                             }
                         }
                     } else {
-                        finalOcrText = "Objek tidak ditemukan"
+                        finalOcrText = "No object found"
                     }
                     timeAfterOcr = System.currentTimeMillis() // Catat waktu setelah proses OCR/logika
 
                     // 4. Gambar Hasil Akhir
                     val resultBitmap = drawBoxesOnBitmap(capturedBitmap, boxes)
-                    timeAfterDraw = System.currentTimeMillis() // Catat waktu setelah menggambar
+                    timeAfterDraw = System.currentTimeMillis() // Catat waktu setelah finalisasi
 
-                    // --- Hitung Durasi ---
+                    // Hitung durasi lama tiap proses
                     val totalDuration = timeAfterDraw - startTimeTotal
                     val captureDuration = timeAfterCapture - startTimeTotal
                     val bitmapDuration = timeAfterBitmap - timeAfterCapture
@@ -167,11 +172,11 @@ class MainActivity : AppCompatActivity() {
                     withContext(Dispatchers.Main) {
                         // Update TextView dengan teks final dan timer
                         ocrTextView.text = finalOcrText
-                        timerTotalTextView.text = "Total Duration: $totalDuration ms"
+                        timerTotalTextView.text = "Total Compute Duration: $totalDuration ms"
                         timerBreakdownTextView.text = """
                         Breakdown:
                         - Capture: $captureDuration ms
-                        - Bitmap Conv: $bitmapDuration ms
+                        - Bitmap Conversion: $bitmapDuration ms
                         - Object Detection: $detectionDuration ms
                         - OCR/Logic: $ocrDuration ms
                         - Drawing: $drawDuration ms
@@ -181,7 +186,7 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
             } catch (exc: Exception) {
-                Log.e(TAG, "Photo capture atau processing gagal", exc)
+                Log.e(TAG, "Photo capture or processing failed", exc)
 
                 withContext(Dispatchers.Main) {
                     captureButton.isEnabled = true
@@ -194,7 +199,7 @@ class MainActivity : AppCompatActivity() {
     private suspend fun takePictureAsynchronously(imageCapture: ImageCapture): ImageProxy {
         return suspendCancellableCoroutine { continuation ->
             imageCapture.takePicture(
-                cameraExecutor, // You can also use ContextCompat.getMainExecutor(this)
+                cameraExecutor,
                 object : ImageCapture.OnImageCapturedCallback() {
                     override fun onCaptureSuccess(image: ImageProxy) {
                         Log.d(TAG, "Photo capture succeeded!")
@@ -294,7 +299,6 @@ class MainActivity : AppCompatActivity() {
             )
             canvas.drawRect(scaledRect, boxPaint)
 
-            // KEMBALI HANYA MENAMPILKAN NAMA KELAS
             val text = "${box.clsName} (${"%.2f".format(box.cnf)})"
             canvas.drawText(text, scaledRect.left, scaledRect.top - 20, textPaint)
         }
@@ -315,8 +319,6 @@ class MainActivity : AppCompatActivity() {
         captureButton.text = "Detect"
     }
 
-    // --- All other functions below this line are the same, no changes needed ---
-    // (startCamera, loadPyTorchModel, parseYoloOutput, etc.)
     private fun startCamera() {
         val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
         cameraProviderFuture.addListener({
@@ -405,18 +407,16 @@ class MainActivity : AppCompatActivity() {
         return interArea / (boxAArea + boxBArea - interArea)
     }
 
-    // In MainActivity.kt
-
     private fun imageProxyToBitmap(image: ImageProxy): Bitmap? {
         val bitmap: Bitmap?
         if (image.format == ImageFormat.JPEG) {
-            // If the image is already a JPEG, it's super easy to convert
+            // If the image is already a JPEG, simply convert
             val buffer = image.planes[0].buffer
             val bytes = ByteArray(buffer.remaining())
             buffer.get(bytes)
             bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
         } else if (image.format == ImageFormat.YUV_420_888) {
-            // If it's the YUV format, we use our robust converter
+            // If it's the YUV format, use robust converter
             val yBuffer = image.planes[0].buffer
             val uBuffer = image.planes[1].buffer
             val vBuffer = image.planes[2].buffer
@@ -433,12 +433,12 @@ class MainActivity : AppCompatActivity() {
             val imageBytes = out.toByteArray()
             bitmap = BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
         } else {
-            // If the format is something else, we can't handle it.
+            // If the format is something else, can't handle it.
             Log.e("ImageConverter", "Unsupported image format: ${image.format}")
             return null
         }
 
-        // Finally, we rotate the bitmap to the correct orientation
+        // Finally, rotate the bitmap to the correct orientation
         val matrix = Matrix()
         matrix.postRotate(image.imageInfo.rotationDegrees.toFloat())
         return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)

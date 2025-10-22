@@ -108,7 +108,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
-                android:text="Breakdown:\n- Capture: ...\n- Bitmap Convert: ...\n- Object Detection: ...\n- OCR: ...\n- Drawing: ..."
+                android:text="Breakdown:\n- Capture: ...\n- Bitmap Conversion: ...\n- Object Detection: ...\n- OCR: ...\n- Drawing: ..."
                 android:textColor="@android:color/white"
                 android:textSize="12sp" />
 
