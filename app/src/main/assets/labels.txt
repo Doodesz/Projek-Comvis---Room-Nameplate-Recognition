@@ -1,7 +1,10 @@
-ruang panel
+lab komputer
+ruang baca
+ruang kelas
+ruang kerja bersama
+ruang khusus
 ruang rapat
-ruangan
-ruangan khusus
+ruang sidang
 tempat wudhu
 toilet
 toilet difabel
